@@ -23,6 +23,9 @@ to be pointed at something other than a token launch.
 | `roam.py` | a working example: the brain drives a real, sandboxed browser with no destination and no wallet |
 | `web/roam.html` | the local UI for `roam.py` |
 | `envcfg.py` | reads `.env`, nothing chain-specific |
+| `goal.py` | `Goal`, a task description a supervisor can hand to a running fly |
+| `supervisor.py` | `Supervisor`, the slow loop that assigns goals, checks progress, and rewards or corrects |
+| `judge.py` | `ai_goal()`, a `Goal` whose progress/success check is an AI model reading the actual page |
 
 Model follows Shiu et al. 2024 (Nature): every neuron is a LIF unit with
 identical passive parameters, a presynaptic spike injects a fixed voltage
@@ -78,6 +81,64 @@ to come from a real web page, and the output does not have to drive a mouse.
 `observe(fired)` every step, `dopamine(+1)` or `dopamine(-1)` on your own
 success/failure signal, `forget()` for slow decay, and `apply()` to write the
 learned gains back into the simulation.
+
+## Giving it goals
+
+The connectome has no language, so it cannot be told "look for X" directly.
+`goal.py`/`supervisor.py` add a slow loop around `roam.py`'s fast one: a
+`Goal` reshapes the world the fly starts in (seed pages, extra allowed
+domains) and judges from the outside whether wandering there counted as
+progress; a `Supervisor` polls a running fly every few seconds, feeds that
+judgement back as a dopamine event, and moves on to the next goal once one
+is reached or its deadline passes.
+
+```bash
+py roam.py &                  # the fly, listening on :4660
+py supervisor.py              # runs the example schedule at the bottom of the file
+```
+
+The two talk only over roam.py's `/goal` and `/reward` endpoints - a
+supervisor (or whatever is deciding goals: a script, a schedule, an AI
+planner reading what the fly turned up and picking what to look into next)
+never touches the connectome directly, so the reflex loop keeps roaming
+safely even if the supervisor is slow, wrong, or not running at all. The
+actual judgement in `goal.check`/`goal.on_progress` is deliberately left as a
+plain function - `keyword_goal()` is a placeholder that matches page
+titles/URLs; `judge.py`'s `ai_goal()` is the real one, and swapping between
+them does not require touching `roam.py` or `supervisor.py` at all:
+
+```python
+from judge import ai_goal
+
+goal = ai_goal(
+    "read something about deep-sea fish",
+    seeds=["https://en.wikipedia.org/wiki/Special:Random"],
+    description="a page that is actually about deep-sea or abyssal fish",
+    deadline_s=600,
+)
+Supervisor().run_goal(goal)
+```
+
+`ai_goal()` fetches the page the fly is currently on with a plain HTTP GET
+(not through the fly's own vision - that stays 892 hex columns of light, it
+still cannot read) and asks a language model whether it satisfies the goal
+description, returning both a hard yes/no and a running valence used as the
+dopamine signal in between. Needs `OPENROUTER_API_KEY`; set
+`FLY_JUDGE_MODEL=stub` to test the wiring with a crude offline keyword match
+instead of a real model call.
+
+## Testing
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+`tests/test_goal_flow.py` exercises `roam.py`'s real `/goal` and `/reward`
+endpoints, `supervisor.py`'s polling/outcome logic and `judge.py`'s `ai_goal()`
+against a mocked mushroom body and mocked page content - no browser, no
+connectome, no live network needed, so it runs the same wherever this repo is
+checked out.
 
 ## Hosting it
 
