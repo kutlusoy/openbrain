@@ -43,7 +43,7 @@ from pathlib import Path
 
 import numpy as np
 import uvicorn
-from fastapi import FastAPI, WebSocket
+from fastapi import Body, FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 
@@ -112,14 +112,30 @@ OPEN = load_env().get("FLY_ROAM_OPEN") == "1"
 
 
 def allowed_host(url):
-    """Open mode drops the fence and leaves only the blocklist behind it."""
+    """
+    Open mode drops the fence and leaves only the blocklist behind it.
+
+    An active goal (see /goal below) can widen the fence for its own run -
+    it can only add domains, never remove the blocklist or the wallet/typing
+    rails, so a goal can send the fly somewhere new but never make it less
+    safe.
+    """
     if OPEN:
         return True
     try:
         from urllib.parse import urlparse
-        return (urlparse(url).hostname or "").lower() in ALLOW
+        host = (urlparse(url).hostname or "").lower()
+        goal = STATE.get("goal")
+        allow = ALLOW | goal["allow"] if goal else ALLOW
+        return host in allow
     except Exception:
         return False
+
+
+def seed_pool():
+    """The active goal's seeds if one is set, otherwise the default pool."""
+    goal = STATE.get("goal")
+    return goal["seeds"] if goal and goal.get("seeds") else SEEDS
 
 
 # Checked against the element under the cursor before a click is allowed.
@@ -173,7 +189,7 @@ app = FastAPI()
 # the public page reads /state and /frame.jpg from a different origin
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET"],
                    allow_headers=["*"])
-STATE = {"brain": None, "pilot": None, "running": False}
+STATE = {"brain": None, "pilot": None, "running": False, "goal": None}
 CLIENTS = set()
 
 
@@ -365,7 +381,7 @@ async def roam(steps_per_page=44, headful=False, seed=None):
                 await log(f"could not open: {str(exc)[:70]}")
                 return False
 
-        await goto(rng.choice(SEEDS), "seed")
+        await goto(rng.choice(seed_pool()), "seed")
 
         cx, cy = 640.0, 400.0
         px_, py_ = cx, cy
@@ -532,7 +548,7 @@ async def roam(steps_per_page=44, headful=False, seed=None):
                             try:
                                 await page.go_back(timeout=15000)
                             except Exception:
-                                await goto(rng.choice(SEEDS), "bounced")
+                                await goto(rng.choice(seed_pool()), "bounced")
                         else:
                             stats["hops"] += 1
                             if mb is not None:
@@ -559,7 +575,7 @@ async def roam(steps_per_page=44, headful=False, seed=None):
             if on_page >= steps_per_page:
                 on_page = 0
                 cx, cy = 640.0, 400.0
-                await goto(rng.choice(SEEDS), "hop budget spent")
+                await goto(rng.choice(seed_pool()), "hop budget spent")
 
             publish(stats, raw, page.url, hz, neural)
             if mb is not None and stats["steps"] % 40 == 0:
@@ -611,9 +627,11 @@ def index():
 
 @app.get("/status")
 def status():
+    goal = STATE.get("goal")
     return {"running": STATE["running"],
             "seeds": len(SEEDS),
-            "brain": bool(STATE["brain"])}
+            "brain": bool(STATE["brain"]),
+            "goal": goal["name"] if goal else None}
 
 
 @app.get("/state")
@@ -622,6 +640,56 @@ def state():
     if p.exists():
         return json.loads(p.read_text())
     return {"updated": 0}
+
+
+@app.get("/goal")
+def get_goal():
+    """The active goal, or {} if the fly is just roaming."""
+    goal = STATE.get("goal")
+    if not goal:
+        return {}
+    return {"name": goal["name"], "seeds": goal["seeds"],
+            "allow": sorted(goal["allow"]), "deadline_s": goal["deadline_s"],
+            "set_at": goal["set_at"]}
+
+
+@app.post("/goal")
+def set_goal(payload: dict = Body(...)):
+    """
+    Reshape the world the fly wanders in: which pages a life starts from,
+    which extra domains the fence opens for. This is the only way in for a
+    supervisor's goal - it cannot touch the brain, only the environment
+    around it. Pass an empty body (or seeds: []) to go back to plain roaming.
+    """
+    seeds = payload.get("seeds") or []
+    STATE["goal"] = {
+        "name": payload.get("name", ""),
+        "seeds": list(seeds),
+        "allow": set(payload.get("allow") or []),
+        "deadline_s": payload.get("deadline_s"),
+        "set_at": time.time(),
+    } if seeds else None
+    say(f"goal set: {payload.get('name', '(cleared)')}")
+    return {"ok": True, "goal": STATE["goal"]}
+
+
+@app.post("/reward")
+def reward(payload: dict = Body(...)):
+    """
+    The other way in: a dopamine event, exactly as `roam()` itself delivers
+    one when the fly reaches or bounces off something. A supervisor calling
+    this is not telling the fly what to do - it is telling the mushroom body
+    what just happened, the same signal the fly's own wandering already uses.
+    """
+    mb = STATE.get("mb")
+    if mb is None:
+        return {"ok": False, "reason": "brain not loaded yet"}
+    valence = float(payload.get("valence", 0))
+    amount = float(payload.get("amount", 1.0))
+    if valence:
+        mb.dopamine(1 if valence > 0 else -1, amount)
+        mb.apply()
+    return {"ok": True, "stats": mb.stats()}
 
 
 @app.get("/frame.jpg")

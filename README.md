@@ -23,6 +23,8 @@ to be pointed at something other than a token launch.
 | `roam.py` | a working example: the brain drives a real, sandboxed browser with no destination and no wallet |
 | `web/roam.html` | the local UI for `roam.py` |
 | `envcfg.py` | reads `.env`, nothing chain-specific |
+| `goal.py` | `Goal`, a task description a supervisor can hand to a running fly |
+| `supervisor.py` | `Supervisor`, the slow loop that assigns goals, checks progress, and rewards or corrects |
 
 Model follows Shiu et al. 2024 (Nature): every neuron is a LIF unit with
 identical passive parameters, a presynaptic spike injects a fixed voltage
@@ -78,6 +80,32 @@ to come from a real web page, and the output does not have to drive a mouse.
 `observe(fired)` every step, `dopamine(+1)` or `dopamine(-1)` on your own
 success/failure signal, `forget()` for slow decay, and `apply()` to write the
 learned gains back into the simulation.
+
+## Giving it goals
+
+The connectome has no language, so it cannot be told "look for X" directly.
+`goal.py`/`supervisor.py` add a slow loop around `roam.py`'s fast one: a
+`Goal` reshapes the world the fly starts in (seed pages, extra allowed
+domains) and judges from the outside whether wandering there counted as
+progress; a `Supervisor` polls a running fly every few seconds, feeds that
+judgement back as a dopamine event, and moves on to the next goal once one
+is reached or its deadline passes.
+
+```bash
+py roam.py &                  # the fly, listening on :4660
+py supervisor.py              # runs the example schedule at the bottom of the file
+```
+
+The two talk only over roam.py's `/goal` and `/reward` endpoints - a
+supervisor (or whatever is deciding goals: a script, a schedule, an AI
+planner reading what the fly turned up and picking what to look into next)
+never touches the connectome directly, so the reflex loop keeps roaming
+safely even if the supervisor is slow, wrong, or not running at all. The
+actual judgement in `goal.check`/`goal.on_progress` is deliberately left as a
+plain function - `keyword_goal()` is a placeholder that matches page
+titles/URLs; swapping it for something that reads the page properly (an AI
+judge, a real detector) does not require touching `roam.py` or `supervisor.py`
+at all.
 
 ## Hosting it
 
