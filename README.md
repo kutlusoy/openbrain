@@ -12,6 +12,9 @@ Robinhood Chain / launchpad integration, the wallet, and the social-posting
 simulation, the vision-to-motor closed loop, and the learning circuit, ready
 to be pointed at something other than a token launch.
 
+Driving a browser is not the goal here - see [`situations/README.md`](situations/README.md)
+for what is.
+
 ## What is in here
 
 | file | what it does |
