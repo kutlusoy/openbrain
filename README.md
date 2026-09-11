@@ -127,6 +127,19 @@ dopamine signal in between. Needs `OPENROUTER_API_KEY`; set
 `FLY_JUDGE_MODEL=stub` to test the wiring with a crude offline keyword match
 instead of a real model call.
 
+## Testing
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+`tests/test_goal_flow.py` exercises `roam.py`'s real `/goal` and `/reward`
+endpoints, `supervisor.py`'s polling/outcome logic and `judge.py`'s `ai_goal()`
+against a mocked mushroom body and mocked page content - no browser, no
+connectome, no live network needed, so it runs the same wherever this repo is
+checked out.
+
 ## Hosting it
 
 ```bash
